@@ -465,3 +465,263 @@ LLM需要使用以下JSON格式来调用工具：
 6. **curl(url: str, timeout: int = 30)**
    - 通过curl访问网页并返回网页内容
    - 参数：url（网页URL）、timeout（超时时间，默认30秒）
+
+## 练习3：聊天记录总结功能
+
+### 文件：`practice03/chat_with_summary.py`
+
+#### 功能用途
+1. **聊天历史检测**：检测聊天历史记录，当超过5轮或上下文长度超过3k时触发总结
+2. **自动总结**：调用LLM对聊天记录进行自动总结
+3. **聊天记录压缩**：对前70%左右的内容进行压缩，最后30%左右的内容保留原文
+4. **工具调用**：保留了practice02中的工具调用功能
+5. **交互式聊天**：支持持续对话，直到用户按下Ctrl+C退出
+
+#### 教学目标
+
+1. **聊天历史管理**
+   - 学习如何检测聊天历史的长度和轮数
+   - 掌握聊天记录压缩的实现方法
+   - 理解上下文管理对LLM性能的影响
+
+2. **自动总结功能**
+   - 学习如何使用LLM生成聊天记录总结
+   - 掌握总结提示词的编写技巧
+   - 理解总结对减少token消耗的作用
+
+3. **性能优化**
+   - 学习如何通过总结减少上下文长度
+   - 掌握token消耗的优化方法
+   - 理解长对话的处理策略
+
+4. **代码结构设计**
+   - 学习如何在现有代码基础上添加新功能
+   - 掌握模块化代码的设计方法
+   - 理解代码的可维护性和可扩展性
+
+### 运行方法
+
+```bash
+python practice03\chat_with_summary.py
+```
+
+### 预期交互
+
+```
+=== Interactive LLM Chat with Tool Calling and History Summary ===
+Type your message and press Enter to send
+Press Ctrl+C to exit
+
+Connected to: qwen/qwen3.5-9b
+Base URL: http://127.0.0.1:1234/v1
+
+You: Hello!
+AI: Hello! How can I help you today?
+
+[Stats] Time: 1.23s, Tokens: 35, Speed: 20.33 tokens/s
+======================================================================
+You: What's the capital of France?
+AI: The capital of France is Paris.
+
+[Stats] Time: 0.87s, Tokens: 28, Speed: 25.29 tokens/s
+======================================================================
+... (after 5 rounds or context over 3k)
+
+=== Chat history threshold reached, generating summary ===
+Current conversation rounds: 5
+Current context length: 3200
+
+=== Generating chat summary ===
+=== API Response ===
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1712889600,
+  "model": "qwen/qwen3.5-9b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The user greeted me and asked about the capital of France. I responded that Paris is the capital of France."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 30,
+    "total_tokens": 130
+  }
+}
+====================
+=== Summary generated ===
+The user greeted me and asked about the capital of France. I responded that Paris is the capital of France.
+
+=== Chat history compressed ===
+New context length: 500
+New message count: 3
+
+You: What's the population of Paris?
+AI: The population of Paris is approximately 2.1 million people within the city limits, and around 12 million people in the greater Paris metropolitan area.
+
+[Stats] Time: 1.56s, Tokens: 45, Speed: 22.50 tokens/s
+======================================================================
+```
+
+### 总结功能说明
+
+1. **触发条件**：
+   - 聊天轮数超过5轮
+   - 聊天上下文长度超过3000字符
+
+2. **压缩策略**：
+   - 对前70%的聊天内容生成总结
+   - 保留最后30%的聊天内容原文
+   - 系统消息始终保留
+
+3. **总结过程**：
+   - 提取用户和助手的对话内容
+   - 调用LLM生成简洁的总结
+   - 将总结替换为一条消息
+   - 更新聊天历史为压缩版本
+
+## 练习4：关键信息提取与聊天历史查找
+
+### 文件：`practice03/chat_with_keyinfo.py`
+
+#### 功能用途
+1. **关键信息提取**：每五次聊天提取一次关键信息，按照5W规则（谁Who、做了什么事What、什么时候When、在何处Where、为什么要做这个事Why）进行提取
+2. **本地记录**：将提取的关键信息记录到本地电脑D:\chat-log\log.txt文件中，支持增量更新
+3. **聊天历史查找**：实现了search_chat_history工具，当用户发送的信息用"/search"开头，或表达了"查找聊天历史"的意思时，可查找聊天历史记录
+4. **工具调用**：保留了之前的工具调用功能
+5. **聊天记录压缩**：保留了聊天记录压缩功能
+
+#### 教学目标
+
+1. **关键信息提取**
+   - 学习如何使用LLM提取关键信息
+   - 掌握5W规则的应用方法
+   - 理解信息提取对对话分析的重要性
+
+2. **本地文件操作**
+   - 学习如何创建目录和文件
+   - 掌握文件的增量更新方法
+   - 理解本地存储对聊天历史管理的作用
+
+3. **聊天历史查找**
+   - 学习如何实现聊天历史的检索功能
+   - 掌握工具调用的设计和实现
+   - 理解用户意图识别的基本方法
+
+4. **多功能集成**
+   - 学习如何在现有代码基础上集成多种功能
+   - 掌握模块化代码的设计方法
+   - 理解功能之间的交互和协调
+
+### 运行方法
+
+```bash
+python practice03\chat_with_keyinfo.py
+```
+
+### 预期交互
+
+```
+=== Interactive LLM Chat with Tool Calling, Summary, and Key Info Extraction ===
+Type your message and press Enter to send
+Press Ctrl+C to exit
+
+Connected to: qwen/qwen3.5-9b
+Base URL: http://127.0.0.1:1234/v1
+
+You: Hello!
+AI: Hello! How can I help you today?
+
+[Stats] Time: 1.23s, Tokens: 35, Speed: 20.33 tokens/s
+======================================================================
+... (after 5 rounds)
+
+=== Extracting key information from chat history ===
+
+=== API Response ===
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1712889600,
+  "model": "qwen/qwen3.5-9b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "1. Who: User and AI assistant\nWhat: Greeted each other and started conversation\n\n2. Who: User\nWhat: Asked about the capital of France\n\n3. Who: AI assistant\nWhat: Answered that Paris is the capital of France"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 200,
+    "completion_tokens": 50,
+    "total_tokens": 250
+  }
+}
+====================
+=== Key information extracted ===
+1. Who: User and AI assistant
+What: Greeted each other and started conversation
+
+2. Who: User
+What: Asked about the capital of France
+
+3. Who: AI assistant
+What: Answered that Paris is the capital of France
+
+Key information saved to D:\chat-log\log.txt
+=== Key information extraction completed ===
+
+You: /search capital of France
+AI: {
+  "tool_call": {
+    "name": "search_chat_history",
+    "arguments": {
+      "query": "capital of France"
+    }
+  }
+}
+
+Executing tool: search_chat_history
+Arguments: {
+  "query": "capital of France"
+}
+Tool execution result: {
+  "success": true,
+  "log_content": "=== 2026-04-15 12:00:00 ===\n1. Who: User and AI assistant\nWhat: Greeted each other and started conversation\n\n2. Who: User\nWhat: Asked about the capital of France\n\n3. Who: AI assistant\nWhat: Answered that Paris is the capital of France\n",
+  "query": "capital of France"
+}
+
+AI: I found information about the capital of France in your chat history. You asked about the capital of France, and I answered that Paris is the capital of France.
+
+[Stats] Time: 1.56s, Tokens: 80, Speed: 25.00 tokens/s
+======================================================================
+```
+
+### 功能说明
+
+1. **关键信息提取**：
+   - 每五次聊天自动触发
+   - 按照5W规则提取信息
+   - 支持多条关键信息提取
+   - 自动保存到本地文件
+
+2. **聊天历史查找**：
+   - 支持以"/search"开头的查询
+   - 支持表达"查找聊天历史"意图的查询
+   - 可根据查询内容搜索历史记录
+   - 将搜索结果与用户请求结合，提供完整回复
+
+3. **本地存储**：
+   - 自动创建目录和文件
+   - 支持增量更新
+   - 记录时间戳和关键信息
+   - 便于后续查询和分析
