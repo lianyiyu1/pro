@@ -73,35 +73,45 @@ class LLMClient:
             'stream': False  # Disable streaming for tool calls
         }
         
-        # Send request
-        req = Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
+        # Send request with retry for 429 errors
+        max_retries = 3
+        retry_delay = 2  # seconds
         
-        try:
-            with urlopen(req) as response:
-                response_content = response.read().decode('utf-8', errors='replace')
-                response_data = json.loads(response_content)
+        for attempt in range(max_retries):
+            req = Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
+            
+            try:
+                with urlopen(req) as response:
+                    response_content = response.read().decode('utf-8', errors='replace')
+                    response_data = json.loads(response_content)
+                    
+                    # API response is processed silently
+                    
+                    # Extract message and content
+                    if 'choices' in response_data and response_data['choices']:
+                        message = response_data['choices'][0]['message']
+                        content = message.get('content', '')
+                    else:
+                        content = ''
+                        message = {}
+                    
+                    # Extract usage
+                    usage = response_data.get('usage', {})
+                break  # Success, exit retry loop
+            except HTTPError as e:
+                # Read error response
+                error_content = e.read().decode('utf-8')
                 
-                # Debug: print full response
-                print("=== API Response ===")
-                print(json.dumps(response_data, indent=2, ensure_ascii=False))
-                print("====================")
-                
-                # Extract message and content
-                if 'choices' in response_data and response_data['choices']:
-                    message = response_data['choices'][0]['message']
-                    content = message.get('content', '')
+                # Handle 429 Too Many Requests error with retry
+                if e.code == 429 and attempt < max_retries - 1:
+                    print(f"Rate limit exceeded. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
                 else:
-                    content = ''
-                    message = {}
-                
-                # Extract usage
-                usage = response_data.get('usage', {})
-        except HTTPError as e:
-            # Read error response
-            error_content = e.read().decode('utf-8')
-            raise Exception(f"HTTP Error {e.code}: {e.reason}\nResponse: {error_content}")
-        except URLError as e:
-            raise Exception(f"URL Error: {e.reason}")
+                    raise Exception(f"HTTP Error {e.code}: {e.reason}\nResponse: {error_content}")
+            except URLError as e:
+                raise Exception(f"URL Error: {e.reason}")
         
         end_time = time.time()
         
@@ -169,6 +179,16 @@ def execute_tool(tool_call):
                 arguments.get('url'),
                 arguments.get('timeout', 30)
             )
+        elif tool_name == "search_chat_history":
+            query = arguments.get('query', '')
+            log_file = r"D:\chat-log\log.txt"
+            
+            if os.path.exists(log_file):
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                result = {"content": content, "query": query}
+            else:
+                result = {"error": "Chat history log file not found"}
         else:
             result = {"error": f"Unknown tool: {tool_name}"}
         
@@ -267,6 +287,70 @@ def compress_chat_history(messages):
     return compressed_history
 
 
+def extract_key_information(messages, client):
+    """Extract key information from chat history using 5W rules"""
+    # Prepare extraction prompt
+    extraction_prompt = """
+    Please extract key information from the following chat history using the 5W rules:
+    - Who: Who is involved
+    - What: What happened
+    - When: When did it happen (optional)
+    - Where: Where did it happen (optional)
+    - Why: Why did it happen (optional)
+    
+    Extract multiple key information points if applicable. Format each point as:
+    [Who] [What] [When] [Where] [Why]
+    
+    Chat History:
+    """
+    
+    # Extract user and assistant messages (excluding system and tool messages)
+    relevant_messages = []
+    for message in messages:
+        if message['role'] in ['user', 'assistant']:
+            relevant_messages.append(f"{message['role'].capitalize()}: {message['content']}")
+    
+    # Create extraction request
+    extraction_messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that extracts key information from chat history using the 5W rules. Extract multiple key information points if applicable and format each point clearly."
+        },
+        {
+            "role": "user",
+            "content": extraction_prompt + "\n".join(relevant_messages)
+        }
+    ]
+    
+    # Get extraction result from LLM
+    print("\n=== Extracting key information ===")
+    extraction_result = client.chat(extraction_messages)
+    extracted_info = extraction_result['content']
+    print(f"=== Key information extracted ===\n{extracted_info}\n")
+    
+    return extracted_info
+
+
+def save_key_information(info):
+    r"""Save extracted key information to D:\chat-log\log.txt"""
+    log_dir = r"D:\chat-log"
+    log_file = os.path.join(log_dir, "log.txt")
+    
+    # Create directory if it doesn't exist
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        print(f"Created directory: {log_dir}")
+    
+    # Append to file
+    with open(log_file, 'a', encoding='utf-8') as f:
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        f.write(f"\n=== Extracted at {timestamp} ===\n")
+        f.write(info)
+        f.write("\n")
+    
+    print(f"Key information saved to: {log_file}")
+
+
 def main():
     """Main function for interactive chat with tool calling and chat history summarization"""
     print("=== Interactive LLM Chat with Tool Calling and History Summary ===")
@@ -310,6 +394,10 @@ You are a helpful AI assistant with access to the following tools:
    - 参数: url (网页URL), timeout (超时时间，默认30秒)
    - 示例: 要获取天气信息，可以访问天气网站的URL
 
+7. search_chat_history(query: str)
+   - 查找聊天历史中的信息
+   - 参数: query (查询关键词)
+
 When you need to use a tool, format your response as:
 
 ```json
@@ -337,6 +425,8 @@ Important:
 6. When users ask about weather, news, or any other real-time information, immediately use the curl tool to fetch the data.
 7. Keep your responses concise and focused. Only provide the core content without unnecessary paragraph markers, special symbols, or English text when responding in Chinese.
 8. Avoid using excessive formatting, emojis, or decorative elements. Focus on providing clear, direct answers.
+9. When users send messages starting with "/search" or express the meaning of "finding chat history", use the search_chat_history tool.
+10. When you think you should find chat history to answer the user's question, use the search_chat_history tool.
 """
         
         # Initialize chat history
@@ -368,6 +458,10 @@ Important:
                 print("\n=== Chat history threshold reached, generating summary ===")
                 print(f"Current conversation rounds: {current_rounds}")
                 print(f"Current context length: {context_length}\n")
+                
+                # Extract and save key information
+                key_info = extract_key_information(chat_history, client)
+                save_key_information(key_info)
                 
                 # Compress chat history
                 compressed_history = compress_chat_history(chat_history)
