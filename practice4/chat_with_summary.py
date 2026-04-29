@@ -81,7 +81,7 @@ class LLMClient:
             req = Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
             
             try:
-                with urlopen(req, timeout=10) as response:
+                with urlopen(req, timeout=30) as response:
                     response_content = response.read().decode('utf-8', errors='replace')
                     response_data = json.loads(response_content)
                     
@@ -579,14 +579,30 @@ def main():
                                     
                                     # Get LLM's response to tool result
                                     print("\nAI: ", end='', flush=True)
-                                    tool_response = client.chat(chat_history)
-                                    tool_response_content = tool_response['content']
-                                    print(tool_response_content)
-                                    
-                                    chat_history.append({
-                                        "role": "assistant",
-                                        "content": tool_response_content
-                                    })
+                                    try:
+                                        tool_response = client.chat(chat_history)
+                                        tool_response_content = tool_response['content']
+                                        # Handle Unicode encoding for Windows PowerShell
+                                        try:
+                                            print(tool_response_content)
+                                        except UnicodeEncodeError:
+                                            # Replace non-ASCII characters with safe equivalents
+                                            safe_content = tool_response_content.encode('ascii', 'replace').decode('ascii')
+                                            print(safe_content)
+                                        
+                                        chat_history.append({
+                                            "role": "assistant",
+                                            "content": tool_response_content
+                                        })
+                                    except Exception as e:
+                                        print(f"Error getting tool response: {e}")
+                                        # Add an error message to chat history
+                                        error_message = f"Error processing tool response: {str(e)}"
+                                        chat_history.append({
+                                            "role": "assistant",
+                                            "content": error_message
+                                        })
+                                        print(error_message)
                                 else:
                                     # Not a tool call, just display the content
                                     print(content)
@@ -624,14 +640,30 @@ def main():
                                     
                                     # Get LLM's response to tool result
                                     print("\nAI: ", end='', flush=True)
-                                    tool_response = client.chat(chat_history)
-                                    tool_response_content = tool_response['content']
-                                    print(tool_response_content)
-                                    
-                                    chat_history.append({
-                                        "role": "assistant",
-                                        "content": tool_response_content
-                                    })
+                                    try:
+                                        tool_response = client.chat(chat_history)
+                                        tool_response_content = tool_response['content']
+                                        # Handle Unicode encoding for Windows PowerShell
+                                        try:
+                                            print(tool_response_content)
+                                        except UnicodeEncodeError:
+                                            # Replace non-ASCII characters with safe equivalents
+                                            safe_content = tool_response_content.encode('ascii', 'replace').decode('ascii')
+                                            print(safe_content)
+                                        
+                                        chat_history.append({
+                                            "role": "assistant",
+                                            "content": tool_response_content
+                                        })
+                                    except Exception as e:
+                                        print(f"Error getting tool response: {e}")
+                                        # Add an error message to chat history
+                                        error_message = f"Error processing tool response: {str(e)}"
+                                        chat_history.append({
+                                            "role": "assistant",
+                                            "content": error_message
+                                        })
+                                        print(error_message)
                                 else:
                                     # Not a tool call, just display the content
                                     print(content)
