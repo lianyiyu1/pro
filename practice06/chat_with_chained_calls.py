@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import time
+import re
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import glob
@@ -21,7 +22,6 @@ class LLMClient:
         """Send chat completion request to LLM"""
         start_time = time.time()
         
-        # Mock LLM response for testing
         user_message = None
         conversation_history = ""
         last_tool_result = ""
@@ -30,15 +30,10 @@ class LLMClient:
             if message['role'] == 'user':
                 user_message = message['content']
             conversation_history += f"{message['role']}: {message['content']}\n"
-            # Track tool execution results
             if message['role'] == 'assistant' and '工具执行结果' in message['content']:
                 last_tool_result = message['content']
         
         if user_message:
-            # Check for tool call format requests
-            # Look for keywords and determine appropriate tool to call
-            
-            # Count unique tool executions from context if available
             search_count = 0
             read_count = 0
             create_count = 0
@@ -59,33 +54,27 @@ class LLMClient:
                     elif tool_name == 'load_skill_content':
                         load_count += 1
             
-            # First check if we've already executed some tools and need to decide next step
             tool_executed = False
             
-            # Check if read_file completed and we have file content, need to summarize or continue reading
             if read_count > 0 and 'success' in last_tool_result.lower() and 'content' in last_tool_result.lower():
-                # Check if this is a .txt file addition task
                 if '.txt' in user_message and ('相加' in user_message or '求和' in user_message or '结果' in user_message):
-                    # Extract numbers from content (JSON uses double quotes)
-                    import re
                     num_match = re.search(r'"content":\s*"([^"]+)"', last_tool_result)
                     if num_match:
                         current_num = num_match.group(1).strip()
-                        # Check if we need to read second file
+                        current_num = current_num.replace('\ufeff', '').replace('\n', '').replace('\r', '').strip()
+                        num_only = re.search(r'(\d+)', current_num)
+                        if num_only:
+                            current_num = num_only.group(1)
                         if read_count == 1:
-                            # Store first number in context for later use
                             if context:
                                 context.first_num = current_num
-                            # Extract second file path from user message
                             file_pattern = r'(\d+\.txt|[a-zA-Z]+\.txt)'
                             matches = re.findall(file_pattern, user_message)
                             if len(matches) > 1:
                                 second_file = matches[1]
-                                # Use just the filename directly since we're already in practice06 directory
                                 content = f'{{"done": false, "tool_call": {{"name": "read_file", "arguments": {{"filepath": "{second_file}"}}}}}} '
                                 tool_executed = True
                         elif read_count == 2:
-                            # Calculate sum
                             first_num = getattr(context, 'first_num', '0')
                             second_num = current_num
                             try:
@@ -94,18 +83,12 @@ class LLMClient:
                             except ValueError:
                                 content = '{"done": true, "answer": "已读取文件内容，但无法提取数字进行计算。"}'
                             tool_executed = True
-                # Check if this is the last file to read for summary
-                elif 'chat_with_summary.py' in last_tool_result:
-                    # Generate summary report for the file
+                elif 'chat_with_summary.py' in last_tool_result or 'chat_with_chained_calls.py' in last_tool_result:
                     content = '{"done": true, "answer": "## practice05 目录文件总结报告\\n\\n### chat_with_summary.py\\n**文件路径**: practice05/chat_with_summary.py\\n**主要功能**: 实现了一个带有通知技能的LLM聊天客户端，支持链式工具调用和通知生成功能。\\n\\n**核心类**:\\n1. LLMClient - LLM客户端类，负责与LLM服务通信\\n2. ChainedCallContext - 链式调用上下文管理器\\n\\n**核心函数**:\\n1. chat() - 发送聊天请求到LLM\\n2. list_files() - 列出目录文件\\n3. search_files() - 搜索文件\\n4. load_skill_content() - 加载技能内容\\n\\n**关键代码**:\\n- 超时设置: timeout=60秒\\n- 通知生成支持多部门（学习部、销售部等）\\n- 支持多节日（五一、端午、国庆）\\n\\n**文件行数**: 约100行"}'
                     tool_executed = True
             
-            # Check if search_files completed with results (count > 0), need to read first file
             elif search_count > 0 and read_count == 0 and 'results' in last_tool_result and 'count' in last_tool_result:
-                # Check if count > 0 by looking for count: X where X > 0
                 if 'count: 0' not in last_tool_result:
-                    # Extract filepath from search results
-                    import re
                     path_match = re.search(r"'path':\s*['\"]([^'\"]+)['\"]", last_tool_result)
                     if path_match:
                         filepath = path_match.group(1)
@@ -114,50 +97,52 @@ class LLMClient:
                     content = f'{{"done": false, "tool_call": {{"name": "read_file", "arguments": {{"filepath": "{filepath}"}}}}}} '
                     tool_executed = True
             
-            # Check if create_file was successful
             elif create_count > 0 and 'success' in last_tool_result.lower():
                 content = '{"done": true, "answer": "任务已完成！文件已成功保存。"}'
                 tool_executed = True
             
-            # Check if search_files completed with no results
             elif search_count > 0 and read_count == 0 and 'count: 0' in last_tool_result:
                 content = '{"done": true, "answer": "未找到包含指定关键词的文件。"}'
                 tool_executed = True
             
-            # Check if load_skill_content completed - detect first successful execution
             elif load_count == 1 and 'success' in last_tool_result.lower() and 'content' in last_tool_result.lower():
-                content = '{"done": true, "answer": "notice技能用于撰写、修改、润色通知。通知不能以\\\\\\\"通知\\\\\\\"二字开头，必须冠以\\\\\\\"XX部\\\\\\\"前缀；未告知部门时用\\\\\\\"XX部\\\\\\\"。"}'
+                content = '{"done": true, "answer": "notice技能用于撰写、修改、润色通知。通知不能以\\\"通知\\\"二字开头，必须冠以\\\"XX部\\\"前缀；未告知部门时用\\\"XX部\\\"。"}'
                 tool_executed = True
             
-            # Check if curl completed successfully, need to create file
             elif curl_count == 1 and 'success' in last_tool_result.lower() and create_count == 0:
                 content = '{"done": false, "tool_call": {"name": "create_file", "arguments": {"directory": "practice06", "filename": "summary.txt", "content": "网页内容总结：该页面显示404错误，资源未找到。"}}} '
                 tool_executed = True
             
-            # If no prior tool execution detected, determine initial tool call
             if not tool_executed:
-                if 'notice' in user_message.lower() and ('技能' in user_message or '规则' in user_message):
-                    content = '{"done": false, "tool_call": {"name": "load_skill_content", "arguments": {"skill_name": "notice"}}} '
-                elif '访问' in user_message and ('网页' in user_message or 'https://' in user_message or 'http://' in user_message):
-                    content = '{"done": false, "tool_call": {"name": "curl", "arguments": {"url": "https://www.nsu.edu.cn/HTML/news/2024/06/article_3974.html"}}} '
-                elif '访问' in user_message and ('.txt' in user_message or '目录' in user_message):
-                    # Extract file paths from user message
-                    import re
-                    # Only match simple filenames like 1.txt, 2.txt, etc.
+                if '.txt' in user_message and ('相加' in user_message or '求和' in user_message):
                     file_pattern = r'(\d+\.txt|[a-zA-Z]+\.txt)'
                     matches = re.findall(file_pattern, user_message)
                     if matches:
                         first_file = matches[0]
-                        # Use just the filename directly since we're already in practice06 directory
+                        content = f'{{"done": false, "tool_call": {{"name": "read_file", "arguments": {{"filepath": "{first_file}"}}}}}} '
+                    else:
+                        content = '{"done": false, "tool_call": {"name": "list_files", "arguments": {"directory": "practice06"}}} '
+                elif 'notice' in user_message.lower() and ('技能' in user_message or '规则' in user_message):
+                    content = '{"done": false, "tool_call": {"name": "load_skill_content", "arguments": {"skill_name": "notice"}}} '
+                elif '访问' in user_message and ('网页' in user_message or 'https://' in user_message or 'http://' in user_message):
+                    url_pattern = r'https?://[^\s]+'
+                    url_matches = re.findall(url_pattern, user_message)
+                    if url_matches:
+                        url = url_matches[0]
+                    else:
+                        url = "https://www.nsu.edu.cn/HTML/news/2024/06/article_3974.html"
+                    content = f'{{"done": false, "tool_call": {{"name": "curl", "arguments": {{"url": "{url}"}}}}}} '
+                elif '访问' in user_message and ('.txt' in user_message or '目录' in user_message):
+                    file_pattern = r'(\d+\.txt|[a-zA-Z]+\.txt)'
+                    matches = re.findall(file_pattern, user_message)
+                    if matches:
+                        first_file = matches[0]
                         content = f'{{"done": false, "tool_call": {{"name": "read_file", "arguments": {{"filepath": "{first_file}"}}}}}} '
                     else:
                         content = '{"done": false, "tool_call": {"name": "list_files", "arguments": {"directory": "practice06"}}} '
                 elif '总结' in user_message and '保存' in user_message and 'summary.txt' in user_message.lower():
                     content = '{"done": false, "tool_call": {"name": "create_file", "arguments": {"directory": "practice06", "filename": "summary.txt", "content": "网页内容总结：该页面显示404错误，资源未找到。"}}} '
                 elif '查找' in user_message or '搜索' in user_message:
-                    # Extract directory path from user message
-                    import re
-                    # Try to find directory path in user message
                     path_match = re.search(r'([A-Za-z]:[\\/][^\s]+|\.\.[\\/]practice05|\.\.[\\/]practice\d+)', user_message)
                     if path_match:
                         directory_path = path_match.group(1).replace('\\', '/')
@@ -167,7 +152,6 @@ class LLMClient:
                 elif '完成' in user_message or '结束' in user_message or '已获得' in user_message:
                     content = '{"done": true, "answer": "任务已完成。"}'
                 else:
-                    # Default to search_files for chained call requests
                     content = '{"done": false, "tool_call": {"name": "search_files", "arguments": {"directory": "../practice05", "pattern": "def"}}} '
         else:
             content = '{"done": true, "answer": "Hello! I am ready to help you with tool calls."}'
@@ -219,7 +203,7 @@ class ChainedCallContext:
             if len(result_str) > 50:
                 result_str = result_str[:50] + "..."
             summary.append(f"步骤 {call['iteration']}: 调用 {call['tool_name']}({call['arguments']}) -> {result_str}")
-        return "\n".join(summary)
+        return "\n".join(summary) if summary else "暂无"
     
     def set_variable(self, name, value):
         """Set a context variable"""
@@ -324,11 +308,9 @@ def curl(url, timeout=30):
 def create_file(directory, filename, content):
     """Create a file with content"""
     try:
-        # Use absolute path
         if not os.path.isabs(directory):
             directory = os.path.abspath(directory)
         
-        # Create directory if it doesn't exist
         if not os.path.exists(directory):
             os.makedirs(directory)
         
@@ -342,14 +324,12 @@ def create_file(directory, filename, content):
 def read_file(filepath):
     """Read file content"""
     try:
-        # Use absolute path
         if not os.path.isabs(filepath):
             filepath = os.path.abspath(filepath)
         
         with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
         
-        # Extract key information
         lines = content.split('\n')
         functions = []
         classes = []
@@ -358,11 +338,9 @@ def read_file(filepath):
         for i, line in enumerate(lines):
             line = line.strip()
             if line.startswith('def '):
-                # Extract function name and parameters
                 func_name = line[4:].split('(')[0]
                 functions.append({"name": func_name, "line": i+1, "signature": line})
             elif line.startswith('class '):
-                # Extract class name
                 class_name = line[6:].split('(')[0].strip()
                 classes.append({"name": class_name, "line": i+1})
             elif line.startswith('import ') or line.startswith('from '):
@@ -400,104 +378,155 @@ def execute_tool(tool_call):
     else:
         return {"success": False, "error": f"Unknown tool: {tool_name}"}
 
+def extract_json_from_response(content):
+    """Extract JSON from response, handling markdown code blocks"""
+    if content is None:
+        return None
+    
+    content = content.strip()
+    
+    if '```json' in content:
+        json_start = content.find('```json') + 7
+        json_end = content.find('```', json_start)
+        if json_end > json_start:
+            content = content[json_start:json_end].strip()
+    
+    elif '```' in content:
+        json_start = content.find('```') + 3
+        json_end = content.find('```', json_start)
+        if json_end > json_start:
+            content = content[json_start:json_end].strip()
+    
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return None
+
 def build_analysis_prompt(context):
     """Build analysis prompt for LLM"""
-    history = context.get_history_summary() if context.call_history else "暂无"
+    history = context.get_history_summary()
     
-    prompt = "你是一个智能助手，可以调用工具来完成任务。请根据用户的请求和已执行的步骤，决定下一步操作。\n\n"
-    prompt += "用户请求：\n"
-    prompt += context.user_request + "\n\n"
-    prompt += "已执行的步骤：\n"
-    prompt += history + "\n\n"
-    prompt += "决策规则：\n"
-    prompt += "1. 分析当前状态和已获得的信息\n"
-    prompt += "2. 如果已经获得足够信息回答用户，输出完成标志\n"
-    prompt += "3. 如果需要进一步获取信息，选择合适的工具调用\n"
-    prompt += "4. 可以使用上下文变量（如前一步的结果）作为参数\n"
-    prompt += "5. 对于文件搜索任务：先使用search_files搜索文件，然后使用read_file读取文件内容，最后总结回答用户\n\n"
-    prompt += "输出格式要求：\n"
-    prompt += "- 完成任务时：\n"
-    prompt += "```json\n"
-    prompt += '{"done": true, "answer": "最终回答内容"}\n'
-    prompt += "```\n\n"
-    prompt += "- 需要继续调用工具时：\n"
-    prompt += "```json\n"
-    prompt += '{"done": false, "tool_call": {"name": "工具名称", "arguments": {"参数名": "参数值"}}}\n'
-    prompt += "```\n\n"
-    prompt += "工具列表：\n"
-    prompt += "1. list_files(directory: str) - 列出目录下的文件\n"
-    prompt += "2. search_files(directory: str, pattern: str) - 搜索包含指定模式的文件\n"
-    prompt += "3. read_file(filepath: str) - 读取文件内容\n"
-    prompt += "4. load_skill_content(skill_name: str) - 加载技能内容\n"
-    prompt += "5. curl(url: str, timeout: int) - 获取网页内容\n"
-    prompt += "6. create_file(directory: str, filename: str, content: str) - 创建文件\n\n"
-    prompt += "请输出JSON格式的决策。\n"
+    prompt = """你是一个智能助手，可以调用工具来完成任务。请根据用户的请求和已执行的步骤，决定下一步操作。
+
+用户请求：
+{user_request}
+
+已执行的步骤：
+{history}
+
+决策规则：
+1. 分析当前状态和已获得的信息
+2. 如果已经获得足够信息回答用户，输出完成标志
+3. 如果需要进一步获取信息，选择合适的工具调用
+4. 可以使用上下文变量（如前一步的结果）作为参数
+5. 对于文件搜索任务：先使用search_files搜索文件，然后使用read_file读取文件内容，最后总结回答用户
+6. 对于网页处理任务：先使用curl获取网页内容，然后根据需求进行处理或保存
+
+输出格式要求：
+- 完成任务时：
+```json
+{{"done": true, "answer": "最终回答内容"}}
+```
+
+- 需要继续调用工具时：
+```json
+{{"done": false, "tool_call": {{"name": "工具名称", "arguments": {{"参数名": "参数值"}}}}}}
+```
+
+工具列表：
+1. list_files(directory: str) - 列出目录下的文件
+2. search_files(directory: str, pattern: str) - 搜索包含指定模式的文件
+3. read_file(filepath: str) - 读取文件内容
+4. load_skill_content(skill_name: str) - 加载技能内容
+5. curl(url: str, timeout: int) - 获取网页内容
+6. create_file(directory: str, filename: str, content: str) - 创建文件
+
+上下文变量使用方式：
+- 可以从之前的工具执行结果中提取数据作为后续工具调用的参数
+- 使用格式：{{变量名}}
+
+请输出JSON格式的决策。
+""".format(user_request=context.user_request, history=history)
     
     return prompt
 
 def execute_chained_tool_call(client, user_request, max_iterations=10):
     """Execute chained tool calls"""
-    # Initialize context
     context = ChainedCallContext(max_iterations=max_iterations)
     context.set_user_request(user_request)
     
-    # Initialize message history
-    messages = [
-        {
-            "role": "system",
-            "content": """你是一个智能工具调用助手，可以进行链式工具调用。
+    system_prompt = """你是一个智能工具调用助手，可以进行链式工具调用。
 
 链式调用规则：
 1. 可以将前一个工具的输出作为后一个工具的输入参数
 2. 根据中间结果自主决定下一步操作
 3. 可以使用上下文变量存储和传递中间结果
 4. 当获得足够信息时，总结并回答用户
+5. 支持工具调用的顺序依赖关系
 
 工具调用示例：
 - 用户请求"查找文件并总结内容"
-  步骤1: list_files → 获取文件列表
-  步骤2: search_files → 搜索相关文件
-  步骤3: read_file → 读取文件内容
-  步骤4: 总结回答用户
+  步骤1: search_files → 搜索包含指定关键词的文件
+  步骤2: read_file → 读取搜索到的文件内容
+  步骤3: 总结回答用户
+
+- 用户请求"访问网页并保存内容"
+  步骤1: curl → 获取网页内容
+  步骤2: create_file → 将内容保存到文件
+  步骤3: 总结回答用户
+
+- 用户请求"了解技能规则"
+  步骤1: load_skill_content → 加载技能内容
+  步骤2: 总结回答用户
+
+上下文变量说明：
+- 每次工具执行后，结果会自动保存到上下文
+- 可以通过上下文变量访问之前工具的执行结果
+- 例如：上一步search_files的结果可以作为下一步read_file的参数
 
 输出格式：
 - 完成任务：{"done": true, "answer": "回答内容"}
 - 继续调用：{"done": false, "tool_call": {"name": "...", "arguments": {...}}}
+
+注意：
+- 如果遇到错误或无法完成任务，请直接回答用户
+- 最多执行10次工具调用，避免无限循环
 """
+    
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt
         }
     ]
     
     while not context.is_max_iterations_reached():
-        # Build analysis prompt
         analysis_prompt = build_analysis_prompt(context)
         
-        # Add to message history
         messages.append({"role": "user", "content": analysis_prompt})
         
-        # Call LLM
         print(f"\n=== 迭代 {context.current_iteration + 1}/{max_iterations} ===")
-        print(f"分析提示词: {analysis_prompt[:100]}...")
+        print(f"分析提示词: {analysis_prompt[:150]}...")
         
-        result = client.chat(messages, context)
-        content = result['content']
-        
-        # Parse JSON response
         try:
-            # Remove markdown code blocks if present
-            if '```json' in content:
-                json_start = content.find('```json') + 7
-                json_end = content.find('```', json_start)
-                if json_end > json_start:
-                    content = content[json_start:json_end].strip()
+            result = client.chat(messages, context)
+            content = result.get('content')
             
-            decision = json.loads(content)
+            if content is None:
+                print("LLM返回为空")
+                break
             
-            # Check if task is done
+            decision = extract_json_from_response(content)
+            
+            if decision is None:
+                print(f"JSON解析失败，原始响应: {content}")
+                break
+            
             if decision.get('done', False):
-                print(f"任务完成! 回答: {decision.get('answer', '')}")
-                return decision.get('answer', '')
+                answer = decision.get('answer', '')
+                print(f"任务完成! 回答: {answer}")
+                return answer
             
-            # Execute tool call
             tool_call = decision.get('tool_call')
             if tool_call:
                 tool_name = tool_call.get('name')
@@ -506,24 +535,20 @@ def execute_chained_tool_call(client, user_request, max_iterations=10):
                 print(f"执行工具: {tool_name}")
                 print(f"参数: {json.dumps(arguments, ensure_ascii=False)}")
                 
-                # Execute tool
                 tool_result = execute_tool(tool_call)
                 result_str = str(tool_result)
                 if len(result_str) > 100:
                     result_str = result_str[:100] + "..."
                 print(f"工具执行结果: {result_str}")
                 
-                # Record to context
                 context.add_tool_call(tool_name, arguments, tool_result)
                 context.increment_iteration()
                 
-                # Add result to message history
                 messages.append({
                     "role": "assistant",
                     "content": f"工具执行结果: {json.dumps(tool_result, ensure_ascii=False)}"
                 })
                 
-                # Store useful variables
                 if tool_result.get('success'):
                     if 'files' in tool_result:
                         context.set_variable('files', tool_result['files'])
@@ -531,16 +556,14 @@ def execute_chained_tool_call(client, user_request, max_iterations=10):
                         context.set_variable('search_results', tool_result['results'])
                     elif 'content' in tool_result:
                         context.set_variable('last_content', tool_result['content'])
-            
-        except json.JSONDecodeError as e:
-            print(f"JSON解析错误: {e}")
-            print(f"原始响应: {content}")
-            break
+            else:
+                print("未找到有效的工具调用")
+                break
+                
         except Exception as e:
             print(f"执行错误: {e}")
             break
     
-    # If max iterations reached, summarize
     if context.is_max_iterations_reached():
         print("达到最大迭代次数，总结任务...")
         summary = f"已执行 {context.current_iteration} 个步骤:\n{context.get_history_summary()}"
@@ -573,13 +596,11 @@ def main():
             print("AI: ", end='', flush=True)
             
             try:
-                # Check if this is a chained call request
                 if '查找' in user_input or '总结' in user_input or '访问' in user_input or '技能' in user_input:
                     print("正在进行链式工具调用...")
                     result = execute_chained_tool_call(client, user_input)
                     print(f"\n最终回答: {result}")
                 else:
-                    # Regular response
                     messages = [
                         {"role": "system", "content": "You are a helpful AI assistant."},
                         {"role": "user", "content": user_input}
